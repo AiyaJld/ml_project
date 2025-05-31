@@ -134,3 +134,68 @@ dataset = pd.concat([dataset, top_actors], axis=1)
 
 # Create a new feature: how many of the top 100 actors are in the movie
 dataset['top_actor_count'] = dataset[top_actors_ls].sum(axis=1)
+
+encoder = OneHotEncoder(sparse=False)
+encoded_mpa = encoder.fit_transform(dataset[['MPA']])
+encoded_mpa_df = pd.DataFrame(encoded_mpa, columns=encoder.get_feature_names_out(['MPA']))
+dataset = dataset.drop(columns=['MPA']).reset_index(drop=True)
+dataset = pd.concat([dataset, encoded_mpa_df], axis=1)
+
+dataset['countries_origin'] = dataset['countries_origin'].apply(ast.literal_eval)
+dataset['production_company'] = dataset['production_company'].apply(ast.literal_eval)
+dataset['genres'] = dataset['genres'].apply(ast.literal_eval)
+dataset['Languages'] = dataset['Languages'].apply(ast.literal_eval)
+dataset['directors'] = dataset['directors'].apply(ast.literal_eval)
+dataset['writers'] = dataset['writers'].apply(ast.literal_eval)
+
+all_genres = set([genre for ls in dataset['genres'] for genre in ls])
+genre_col = {}
+for genre in all_genres:
+    genre_col[f'genre_{genre}'] = dataset['genres'].apply(lambda x: int(genre in x))
+genre_df = pd.DataFrame(genre_col)
+dataset = pd.concat([dataset, genre_df], axis=1)
+
+all_writers = [writer for ls in dataset['writers'] for writer in ls]
+writer_counts = Counter(all_writers)
+top_50 = writer_counts.most_common(50)
+top_writers_ls = [writer for writer, count in top_50]
+top_writers = pd.DataFrame({
+    writer: dataset['writers'].map(lambda x: writer in x).astype(int)
+    for writer in top_writers_ls
+})
+
+all_directors = [director for ls in dataset['directors'] for director in ls]
+director_counts = Counter(all_directors)
+top_40 = director_counts.most_common(40)
+top_director_ls = [director for director, count in top_40]
+top_director = pd.DataFrame({
+    director: dataset['directors'].map(lambda x: director in x).astype(int)
+    for director in top_director_ls
+})
+
+all_countries = [country for ls in dataset['countries_origin'] for country in ls]
+country_counts = Counter(all_countries)
+top_30 = country_counts.most_common(30)
+top_countries_ls = [country for country, count in top_30]
+top_countries = pd.DataFrame({
+    country: dataset['countries_origin'].map(lambda x: country in x)
+    for country in top_countries_ls
+})
+
+all_production = [production for ls in dataset['production_company'] for production in ls]
+production_counts = Counter(all_production)
+top_40_production = production_counts.most_common(40)
+top_productions_ls = [production for production, count in top_40_production]
+top_productions = pd.DataFrame({
+    prod: dataset['production_company'].map(lambda x: prod in x)
+    for prod in top_productions_ls
+})
+
+all_languages = [language for ls in dataset['Languages'] for language in ls]
+languages_counts = Counter(all_languages)
+top_25 = languages_counts.most_common(25)
+top_languages_ls = [language for language, count in top_25]
+top_languages = pd.DataFrame({
+    language: dataset['Languages'].map(lambda x: language in x)
+    for language in top_languages_ls
+})
