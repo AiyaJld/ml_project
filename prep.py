@@ -7,6 +7,8 @@ from collections import Counter
 from sklearn.preprocessing import OneHotEncoder 
 from sklearn.model_selection import train_test_split 
 from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import root_mean_squared_error, r2_score
 
 # Path to folder containing CSV files
 path = "archive-2/Data/all_years"
@@ -32,6 +34,7 @@ dataset = dataset[~dataset['méta_score'].isna()]
 dataset = dataset[~dataset['production_company'].isna()]
 dataset = dataset[~dataset['stars'].isna()]
 dataset = dataset[~dataset['MPA'].isna()]
+dataset = dataset[~dataset['Rating'].isna()]
 dataset = dataset.reset_index(drop=True)
 
 # Drop columns that are irrelevant or unnecessary for analysis
@@ -145,7 +148,7 @@ dataset = pd.concat([dataset, top_actors], axis=1)
 dataset['top_actor_count'] = dataset[top_actors_ls].sum(axis=1)
 
 # One-hot encode the 'MPA' rating column using sklearn's OneHotEncoder
-encoder = OneHotEncoder(sparse=False)
+encoder = OneHotEncoder(sparse_output=False)
 encoded_mpa = encoder.fit_transform(dataset[['MPA']])
 encoded_mpa_df = pd.DataFrame(encoded_mpa, columns=encoder.get_feature_names_out(['MPA']))
 
@@ -260,3 +263,26 @@ print("Train std:\n", train_data[num_features].std())
 # Print mean and standard deviation of test data (may differ slightly)
 print("\nTest mean:\n", test_data[num_features].mean())
 print("Test std:\n", test_data[num_features].std())
+
+target_scaler = StandardScaler()
+train_data['Rating_scaled'] = target_scaler.fit_transform(train_data['Rating'].values.reshape(-1,1))
+test_data['Rating_scaled'] = target_scaler.transform(test_data['Rating'].values.reshape(-1,1))
+
+x_train = train_data.drop(columns=['Rating', 'Title', 'writers', 'directors', 'stars',
+    'countries_origin', 'production_company','awards_content', 'genres', 'Languages', 'Rating_scaled'])
+y_train = train_data['Rating_scaled']
+x_test = test_data.drop(columns=['Rating', 'Title', 'writers', 'directors', 'stars',
+    'countries_origin', 'production_company','awards_content', 'genres', 'Languages', 'Rating_scaled'])
+y_test = test_data['Rating_scaled']
+
+model = LinearRegression()
+model.fit(x_train, y_train)
+y_train_pred = model.predict(x_train)
+y_test_pred = model.predict(x_test)
+
+print("Train RMSE:", root_mean_squared_error(y_train, y_train_pred))
+print("Train R2:", r2_score(y_train, y_train_pred))
+
+# Оценка на тестовых данных
+print("Test RMSE:", root_mean_squared_error(y_test, y_test_pred))
+print("Test R2:", r2_score(y_test, y_test_pred))
