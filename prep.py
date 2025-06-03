@@ -35,7 +35,7 @@ dataset = dataset[~dataset['MPA'].isna()]
 dataset = dataset.reset_index(drop=True)
 
 # Drop columns that are irrelevant or unnecessary for analysis
-dataset = dataset.drop(columns=['gross_US_Canada','opening_weekend_Gross','budget', 'Movie Link', 'description', 'filming_locations', 'release_date'])
+dataset = dataset.drop(columns=['gross_US_Canada', 'opening_weekend_Gross', 'budget', 'Movie Link', 'description', 'filming_locations', 'release_date'])
 
 # Function to convert duration strings (e.g., '2h 30m') to total minutes
 def convert_duration(duration):
@@ -63,7 +63,7 @@ def convert_votes(votes):
 def convert_gross(gross):
     if pd.isna(gross):
         return np.nan
-    gross = int(gross.replace('$', '').replace(',',''))
+    gross = int(gross.replace('$', '').replace(',', ''))
     return gross
 
 # Fill missing values in 'awards_content' column with a default list ['No awards']
@@ -145,7 +145,7 @@ dataset = pd.concat([dataset, top_actors], axis=1)
 dataset['top_actor_count'] = dataset[top_actors_ls].sum(axis=1)
 
 # One-hot encode the 'MPA' rating column using sklearn's OneHotEncoder
-encoder = OneHotEncoder(sparse=False)
+encoder = OneHotEncoder(sparse_output=False)
 encoded_mpa = encoder.fit_transform(dataset[['MPA']])
 encoded_mpa_df = pd.DataFrame(encoded_mpa, columns=encoder.get_feature_names_out(['MPA']))
 
@@ -225,25 +225,6 @@ num_features = ['méta_score', 'grossWorldWWide', 'Votes', 'Duration', 'Oscar_no
 # Split dataset into training and testing sets (80% train, 20% test)
 train_data, test_data = train_test_split(dataset, test_size=0.2, random_state=42)
 
-"""
-# Manual standardization example (commented out)
-mean = train_data[num_features].mean()
-std = train_data[num_features].std()
-
-train_data[num_features] = (train_data[num_features] - mean)/std
-test_data[num_features] = (test_data[num_features] - mean)/std
-
-# Check training data statistics
-print("Train data statistics:")
-print(train_data[num_features].mean())
-print(train_data[num_features].std())
-
-# Check testing data statistics
-print("\nTest data statistics:")
-print(test_data[num_features].mean())
-print(test_data[num_features].std())
-"""
-
 # Initialize StandardScaler
 scaler = StandardScaler()
 
@@ -260,3 +241,6 @@ print("Train std:\n", train_data[num_features].std())
 # Print mean and standard deviation of test data (may differ slightly)
 print("\nTest mean:\n", test_data[num_features].mean())
 print("Test std:\n", test_data[num_features].std())
+
+train_data.to_csv('processed_train_data.csv', index=False)
+test_data.to_csv('processed_test_data.csv', index=False)
