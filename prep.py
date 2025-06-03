@@ -5,8 +5,11 @@ import re
 import ast
 from collections import Counter
 from sklearn.preprocessing import OneHotEncoder 
-from sklearn.model_selection import train_test_split 
+from sklearn.model_selection import train_test_split, cross_val_score, learning_curve
 from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import root_mean_squared_error, r2_score
+import seaborn as sns
 
 # Path to folder containing CSV files
 path = "archive-2/Data/all_years"
@@ -32,6 +35,7 @@ dataset = dataset[~dataset['méta_score'].isna()]
 dataset = dataset[~dataset['production_company'].isna()]
 dataset = dataset[~dataset['stars'].isna()]
 dataset = dataset[~dataset['MPA'].isna()]
+dataset = dataset[~dataset['Rating'].isna()]
 dataset = dataset.reset_index(drop=True)
 
 # Drop columns that are irrelevant or unnecessary for analysis
@@ -241,6 +245,76 @@ print("Train std:\n", train_data[num_features].std())
 # Print mean and standard deviation of test data (may differ slightly)
 print("\nTest mean:\n", test_data[num_features].mean())
 print("Test std:\n", test_data[num_features].std())
-
+"""
 train_data.to_csv('processed_train_data.csv', index=False)
 test_data.to_csv('processed_test_data.csv', index=False)
+"""
+target_scaler = StandardScaler()
+train_data['Rating_scaled'] = target_scaler.fit_transform(train_data['Rating'].values.reshape(-1,1))
+test_data['Rating_scaled'] = target_scaler.transform(test_data['Rating'].values.reshape(-1,1))
+
+x_train = train_data.drop(columns=['Rating', 'Title', 'writers', 'directors', 'stars',
+    'countries_origin', 'production_company', 'awards_content', 'genres', 'Languages', 'Rating_scaled'])
+y_train = train_data['Rating_scaled']
+x_test = test_data.drop(columns=['Rating', 'Title', 'writers', 'directors', 'stars',
+    'countries_origin', 'production_company', 'awards_content', 'genres', 'Languages', 'Rating_scaled'])
+y_test = test_data['Rating_scaled']
+
+model = LinearRegression()
+model.fit(x_train, y_train)
+y_train_pred = model.predict(x_train)
+y_test_pred = model.predict(x_test)
+
+print("Train RMSE:", root_mean_squared_error(y_train, y_train_pred))
+print("Train R2:", r2_score(y_train, y_train_pred))
+
+print("Test RMSE:", root_mean_squared_error(y_test, y_test_pred))
+print("Test R2:", r2_score(y_test, y_test_pred))
+
+# Scatter Plot
+plt.figure(figsize=(6, 6))
+plt.scatter(y_test, y_test_pred, alpha=0.5)
+plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--')
+plt.xlabel("Real values")
+plt.ylabel("Predicted values")
+plt.title("Real vs Predicted")
+plt.show()
+
+# Error histogram
+error = y_test - y_test_pred
+sns.histplot(error, bins=30, kde=True)
+plt.title("Distribution of errors")
+plt.xlabel("Errors")
+plt.ylabel("Amount")
+plt.show()
+
+# Learning curve
+train_sizes, train_scores, test_scores = learning_curve(
+    LinearRegression(), x_train, y_train, cv=5, scoring='neg_mean_squared_error'
+)
+train_rmse = (-train_scores.mean(axis=1)) ** 0.5
+test_rmse = (-test_scores.mean(axis=1)) ** 0.5
+plt.plot(train_sizes, train_rmse, label='Train RMSE')
+plt.plot(train_sizes, test_rmse, label='Validation RMSE')
+plt.xlabel("Amount of training values")
+plt.ylabel("RMSE")
+plt.title("Learning curve")
+plt.legend()
+plt.show()
+
+#KFold
+scores = cross_val_score(model, x_train, y_train, cv=5, scoring='neg_root_mean_squared_error')
+rmse_scores = -scores
+sns.boxplot(rmse_scores)
+plt.title("RMSE Kfold")
+plt.xlabel("RMSE")
+plt.show()
+
+# Ratio plot
+rat_df = pd.Series(model.coef_, index=x_train.columns).sort_values()
+top_rat = rat_df.reindex(rat_df.abs().sort_values(ascending=False).index[:20])
+plt.figure(figsize=(8, 6))
+top_rat.sort_values().plot(kind='barh', title='Top 10 feature of influence on the rating')
+plt.xlabel('Ratio')
+plt.tight_layout()
+plt.show()
