@@ -50,11 +50,11 @@ numeric_cols = ['Rating', 'grossWorldWWide', 'Duration', 'Votes', 'méta_score']
 plt.figure(figsize=(15, 10))
 for i, col in enumerate(numeric_cols, 1):
     plt.subplot(2, 3, i)
-    sns.histplot(df[col], bins=10, kde=False, color='lightBlue')
+    sns.histplot(df[col], bins=10, kde=False, color='lightBlue', edgecolor='black')
     plt.title(f'Distribution of {col}')
     plt.xlabel(col)
     plt.ylabel('Amount')
-plt.tight_layout()
+plt.tight_layout(h_pad=2.5)
 plt.show()
 
 # Box plots for numeric variables
@@ -76,7 +76,7 @@ plt.show()
 
 # Count plot for MPA ratings
 plt.figure(figsize=(8, 5))
-sns.countplot(x='MPA', data=df, color='Blue')
+sns.countplot(x='MPA', data=df, color='lightBlue', edgecolor='black')
 plt.title('Amount of Movies by MPAA Rating')
 plt.xlabel('MPAA Rating')
 plt.ylabel('Amount')
@@ -96,11 +96,11 @@ for page in range(pages):
     end = start + genres_per_page + (1 if page < remainder else 0)
     subset = genre_counts[start:end]
     plt.figure(figsize=(10, 10))
-    sns.barplot(y=subset.index, x=subset.values, color='Blue')
+    sns.barplot(y=subset.index, x=subset.values, color='lightBlue', edgecolor='black')
     plt.title(f'Genres {start + 1} to {end} of {total_genres}')
     plt.xlabel('Amount')
     plt.ylabel('Genre')
-    plt.xlim(0, x_max)  # одинаковая ось X на всех страницах
+    plt.xlim(0, x_max)
     plt.tight_layout()
     plt.show()
     start = end
