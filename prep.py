@@ -43,7 +43,8 @@ dataset = dataset[~dataset['Rating'].isna()]
 dataset = dataset.reset_index(drop=True)
 
 # Drop columns that are irrelevant or unnecessary for analysis
-dataset = dataset.drop(columns=['gross_US_Canada', 'opening_weekend_Gross', 'budget', 'Movie Link', 'description', 'filming_locations', 'release_date'])
+dataset = dataset.drop(columns=['gross_US_Canada', 'opening_weekend_Gross', 'budget', 'Movie Link', 'description',
+                                'filming_locations', 'release_date'])
 
 # Function to convert duration strings (e.g., '2h 30m') to total minutes
 def convert_duration(duration):
@@ -129,8 +130,9 @@ dataset['Oscar_won'] = oscar_won
 dataset['Nominations'] = nominations
 dataset['Wins'] = wins
 
+# Feature selection (1st)
 mir_features = ['méta_score', 'grossWorldWWide', 'Votes', 'Duration',
-               'Oscar_nominated', 'Oscar_won', 'Nominations', 'Wins', 'Year']
+                'Oscar_nominated', 'Oscar_won', 'Nominations', 'Wins', 'Year']
 
 y_mir = dataset['Rating']
 
@@ -147,6 +149,7 @@ print("MI scores:")
 print(top_mi)
 '''
 dataset = dataset.drop(columns=['Oscar_nominated', 'Oscar_won', 'Year', 'grossWorldWWide'])
+
 # Convert string representations of lists in 'stars' column to actual Python lists
 dataset['stars'] = dataset['stars'].apply(ast.literal_eval)
 
@@ -259,34 +262,6 @@ num_features = ['méta_score', 'Votes', 'Duration', 'Nominations',
 # Split dataset into training and testing sets (80% train, 20% test)
 train_data, test_data = train_test_split(dataset, test_size=0.2, random_state=42)
 
-# ---------- TARGET-ENCODING BLOCK ----------
-
-def mean_encode(train_ser, test_ser, target, min_samples=10, smooth=5):
-    """Возвращает два pd.Series с mean-encoding (train и test)."""
-    global_mean = target.mean()
-    agg = train_ser.groupby(train_ser).agg(['count'])
-    agg['mean'] = train_ser.groupby(train_ser).apply(lambda idx: target.loc[idx.index].mean())
-    # сглаживание
-    agg['enc'] = (agg['mean']*agg['count'] + global_mean*smooth) / (agg['count']+smooth)
-    # классы с < min_samples → global_mean
-    agg.loc[agg['count'] < min_samples, 'enc'] = global_mean
-    return train_ser.map(agg['enc']).fillna(global_mean), test_ser.map(agg['enc']).fillna(global_mean)
-
-# пример: студии (production_company)  —> mean_rating_prod
-train_data['main_prod'] = train_data['production_company'].apply(lambda lst: lst[0] if lst else 'Unknown')
-test_data ['main_prod'] = test_data ['production_company'].apply(lambda lst: lst[0] if lst else 'Unknown')
-
-enc_tr, enc_te = mean_encode(train_data['main_prod'], test_data['main_prod'],
-                             train_data['Rating'])
-
-train_data['mean_rating_prod'] = enc_tr
-test_data ['mean_rating_prod'] = enc_te
-
-# по аналогии можно сделать для актёра №1, языка №1 …
-# затем (по желанию) удалить сотни one-hot-колонок актёров/студий:
-dataset = dataset.drop(columns=top_actors_ls + top_productions_ls, errors='ignore')
-# ---------- END TARGET-ENCODING BLOCK ----------
-
 # Initialize StandardScaler
 scaler = StandardScaler()
 
@@ -295,77 +270,20 @@ train_data[num_features] = scaler.fit_transform(train_data[num_features])
 
 # Apply the same scaler transformation to test data (no fitting)
 test_data[num_features] = scaler.transform(test_data[num_features])
-"""
-# Print mean and standard deviation of training data (should be ~0 and ~1)
-print("Train mean:\n", train_data[num_features].mean())
-print("Train std:\n", train_data[num_features].std())
 
-# Print mean and standard deviation of test data (may differ slightly)
-print("\nTest mean:\n", test_data[num_features].mean())
-print("Test std:\n", test_data[num_features].std())
-""""""
-train_data.to_csv('processed_train_data.csv', index=False)
-test_data.to_csv('processed_test_data.csv', index=False)
-"""
+# Scaler
 target_scaler = StandardScaler()
 train_data['Rating_scaled'] = target_scaler.fit_transform(train_data['Rating'].values.reshape(-1, 1))
 test_data['Rating_scaled'] = target_scaler.transform(test_data['Rating'].values.reshape(-1, 1))
 
-# 0. Числовые колонки, которые уже отмасштабированы
-num_features = ['méta_score', 'Votes', 'Duration',
-                'Nominations', 'Wins', 'top_actor_count']
-text_cols = ['Title', 'writers', 'directors', 'stars',
-             'countries_origin', 'production_company',
-             'awards_content', 'genres', 'Languages']
-skip_cols  = num_features + ['Rating', 'Rating_scaled'] + text_cols
-
-def is_binary(col):
-    if is_bool_dtype(col):
-        return True
-    if is_numeric_dtype(col):
-        u = col.dropna().unique()
-        return len(u) <= 2 and set(u).issubset({0, 1})
-    return False
-
-# 1) частотный фильтр для one-hot
-freq_threshold = 20
-one_hot_cols = [c for c in train_data.columns
-                if c not in skip_cols and is_binary(train_data[c])]
-
-rare_cols = [c for c in one_hot_cols if train_data[c].sum() < freq_threshold]
-train_data = train_data.drop(columns=rare_cols + text_cols)   # убираем редкие + текст
-test_data  = test_data.drop (columns=rare_cols + text_cols)
-
-# 2) выбираем только числовые/булевы колонки
-X_tr_tmp   = train_data.drop(columns=['Rating', 'Rating_scaled']).select_dtypes(include=['number','bool'])
-y_train_fs = train_data['Rating_scaled']
-
-# 3) модельный отбор по важности
-rf_selector = SelectFromModel(
-        RandomForestRegressor(
-            n_estimators=300,
-            max_features='sqrt',
-            min_samples_leaf=3,
-            n_jobs=-1,
-            random_state=42),
-        threshold='median')
-
-rf_selector.fit(X_tr_tmp, y_train_fs)
-keep_cols = X_tr_tmp.columns[rf_selector.get_support()].tolist()
-
-# 4) финальный набор данных
-train_data = train_data[keep_cols + ['Rating_scaled']]
-test_data  = test_data [keep_cols + ['Rating_scaled']]
-
-print(f'После FS осталось {len(keep_cols)} признаков '
-      f'(изначально {X_tr_tmp.shape[1]})')
-# ---------- END FEATURE-SELECTION BLOCK ----------
-
-x_train = train_data.drop(columns=['Rating_scaled'])
+x_train = train_data.drop(columns=['Rating', 'Title', 'writers', 'directors', 'stars',
+    'countries_origin', 'production_company', 'awards_content', 'genres', 'Languages', 'Rating_scaled'])
 y_train = train_data['Rating_scaled']
-x_test = test_data.drop(columns=['Rating_scaled'])
+x_test = test_data.drop(columns=['Rating', 'Title', 'writers', 'directors', 'stars',
+    'countries_origin', 'production_company', 'awards_content', 'genres', 'Languages', 'Rating_scaled'])
 y_test = test_data['Rating_scaled']
 
+# LinearRegression
 model = LinearRegression()
 model.fit(x_train, y_train)
 y_train_pred = model.predict(x_train)
@@ -376,7 +294,32 @@ print("Test R2:", r2_score(y_test, y_test_pred))
 print("Train RMSE:", root_mean_squared_error(y_train, y_train_pred))
 print("Train R2:", r2_score(y_train, y_train_pred))
 
-"""
+# DecisionTree
+dt = DecisionTreeRegressor(max_depth=15, min_samples_leaf=3, random_state=42)
+dt.fit(x_train, y_train)
+
+y_pred = dt.predict(x_test)
+rmse_dt = root_mean_squared_error(y_test, y_pred)
+r2_dt = r2_score(y_test, y_pred)
+print(f"DT RMSE={rmse_dt:.3f},  R²={r2_dt:.3f}")
+
+# RandomForest
+rf = RandomForestRegressor(
+        n_estimators=900,
+        max_features=0.5,
+        min_samples_leaf=1,
+        n_jobs=-1,
+        oob_score=True,
+        random_state=42)
+rf.fit(x_train, y_train)
+
+print("OOB R² :", rf.oob_score_)
+y_pred = rf.predict(x_test)
+rmse_rf = root_mean_squared_error(y_test, y_pred)
+r2_rf = r2_score(y_test, y_pred)
+print(f"RF   RMSE={rmse_rf:.3f},  R²={r2_rf:.3f}")
+
+'''
 # Scatter Plot
 plt.figure(figsize=(6, 6))
 plt.scatter(y_test, y_test_pred, alpha=0.5)
@@ -418,35 +361,11 @@ plt.show()
 
 # Ratio plot
 rat_df = pd.Series(model.coef_, index=x_train.columns).sort_values()
-top_rat = rat_df.reindex(rat_df.abs().sort_values(ascending=False).index[:20])
+top_rat = rat_df.reindex(rat_df.abs().sort_values(ascendingx=False).index[:20])
 plt.figure(figsize=(8, 6))
 top_rat.sort_values().plot(kind='barh', title='Top 10 feature of influence on the rating')
 plt.xlabel('Ratio')
 plt.tight_layout()
 plt.show()
-"""
 
-# DecisionTree
-dt = DecisionTreeRegressor(max_depth=15, min_samples_leaf=3, random_state=42)
-dt.fit(x_train, y_train)
-
-y_pred = dt.predict(x_test)
-rmse_dt = root_mean_squared_error(y_test, y_pred)
-r2_dt = r2_score(y_test, y_pred)
-print(f"DT  RMSE={rmse_dt:.3f},  R²={r2_dt:.3f}")
-
-# RandomForest
-rf = RandomForestRegressor(
-        n_estimators=900,
-        max_features=0.5,     # m ≈ √p
-        min_samples_leaf=1,
-        n_jobs=-1,
-        oob_score=True,
-        random_state=42)
-rf.fit(x_train, y_train)
-
-print("OOB R² :", rf.oob_score_)
-y_pred = rf.predict(x_test)
-rmse_rf = root_mean_squared_error(y_test, y_pred)
-r2_rf = r2_score(y_test, y_pred)
-print(f"Test   RMSE={rmse_rf:.3f},  R²={r2_rf:.3f}")
+'''
