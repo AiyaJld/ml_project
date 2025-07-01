@@ -85,9 +85,6 @@ dataset['grossWorldWWide'] = dataset['grossWorldWWide'].apply(convert_gross)
 dataset['Votes'] = dataset['Votes'].apply(convert_votes)
 dataset['Duration'] = dataset['Duration'].apply(convert_duration)
 
-# Fill missing gross revenue values with the median of the column
-dataset['grossWorldWWide'] = dataset['grossWorldWWide'].fillna(dataset['grossWorldWWide'].median())
-
 # Function to extract Oscar nominations, wins, total nominations, and total wins from awards text
 def award_proc(awards):
     if not isinstance(awards, str):
@@ -129,8 +126,8 @@ dataset['Oscar_nominated'] = oscar_nominated
 dataset['Oscar_won'] = oscar_won
 dataset['Nominations'] = nominations
 dataset['Wins'] = wins
-
-# Feature selection (1st)
+'''
+# Feature selection
 mir_features = ['méta_score', 'grossWorldWWide', 'Votes', 'Duration',
                 'Oscar_nominated', 'Oscar_won', 'Nominations', 'Wins', 'Year']
 
@@ -144,12 +141,12 @@ selector_mir.fit(X_mir_scaled, y_mir)
 
 mi_scores = pd.Series(selector_mir.scores_, index=mir_features)
 top_mi = mi_scores.sort_values(ascending=False)
-'''
+''''''
 print("MI scores:")
 print(top_mi)
-'''
-dataset = dataset.drop(columns=['Oscar_nominated', 'Oscar_won', 'Year', 'grossWorldWWide'])
 
+dataset = dataset.drop(columns=['Oscar_nominated', 'Oscar_won', 'Year', 'grossWorldWWide'])
+'''
 # Convert string representations of lists in 'stars' column to actual Python lists
 dataset['stars'] = dataset['stars'].apply(ast.literal_eval)
 
@@ -262,37 +259,88 @@ num_features = ['méta_score', 'Votes', 'Duration', 'Nominations',
 # Split dataset into training and testing sets (80% train, 20% test)
 train_data, test_data = train_test_split(dataset, test_size=0.2, random_state=42)
 
+train_data = train_data.fillna(0)
+test_data = test_data.fillna(0)
+
+train_lin = train_data.copy()
+test_lin = test_data.copy()
+
+# ─────────── START FORWARD SELECTION ─────────────────────────────
+# 0.  берем только числовые/булевые колонки; Rating — целевая
+candidate_cols = train_lin.select_dtypes(include=['number', 'bool']).columns.drop('Rating')
+y_fs = train_lin['Rating']
+
+selected = []          # уже отобранные признаки
+remaining = list(candidate_cols)
+best_rmse = np.inf
+min_gain = 0.001       # минимальное улучшение (силa стоп-критерия)
+max_feats = 120         # верхний предел, как в примерах презентации
+
+while remaining and len(selected) < max_feats:
+    scores = []
+    for col in remaining:
+        feats = selected + [col]
+        X = train_lin[feats]
+        # 3-fold CV, метрика = RMSE (как на слайде «quality criterion»)
+        rmse = -cross_val_score(LinearRegression(), X, y_fs, cv=3, scoring='neg_root_mean_squared_error').mean()
+        scores.append((rmse, col))
+    # выбираем фичу с наименьшим CV-RMSE
+    scores.sort()
+    curr_rmse, best_col = scores[0]
+
+    # проверяем, есть ли ощутимый прирост
+    if best_rmse - curr_rmse > min_gain:
+        selected.append(best_col)
+        remaining.remove(best_col)
+        best_rmse = curr_rmse
+        print(f" + {best_col:30s}  CV-RMSE → {best_rmse:.3f}")
+    else:
+        print("  прирост < min_gain — стоп")
+        break
+
+print(f"\nForward-selection оставил {len(selected)} признаков из {len(candidate_cols)}")
+# 1.  оставляем только отобранные признаки + таргет
+train_lin = train_lin[selected + ['Rating']]
+test_lin = test_lin[selected + ['Rating']]
+# ─────────── END FORWARD SELECTION ─────────────────────────────
+
+num_features_fs = [c for c in train_lin.columns
+                   if is_numeric_dtype(train_lin[c]) and c != 'Rating']
+
 # Initialize StandardScaler
 scaler = StandardScaler()
 
 # Fit scaler only on training data and transform training numerical features
-train_data[num_features] = scaler.fit_transform(train_data[num_features])
+train_lin[num_features_fs] = scaler.fit_transform(train_lin[num_features_fs])
 
 # Apply the same scaler transformation to test data (no fitting)
-test_data[num_features] = scaler.transform(test_data[num_features])
+test_lin[num_features_fs] = scaler.transform(test_lin[num_features_fs])
 
 # Scaler
 target_scaler = StandardScaler()
-train_data['Rating_scaled'] = target_scaler.fit_transform(train_data['Rating'].values.reshape(-1, 1))
-test_data['Rating_scaled'] = target_scaler.transform(test_data['Rating'].values.reshape(-1, 1))
+train_lin['Rating_scaled'] = target_scaler.fit_transform(train_lin['Rating'].values.reshape(-1, 1))
+test_lin['Rating_scaled'] = target_scaler.transform(test_lin['Rating'].values.reshape(-1, 1))
 
-x_train = train_data.drop(columns=['Rating', 'Title', 'writers', 'directors', 'stars',
-    'countries_origin', 'production_company', 'awards_content', 'genres', 'Languages', 'Rating_scaled'])
-y_train = train_data['Rating_scaled']
-x_test = test_data.drop(columns=['Rating', 'Title', 'writers', 'directors', 'stars',
-    'countries_origin', 'production_company', 'awards_content', 'genres', 'Languages', 'Rating_scaled'])
-y_test = test_data['Rating_scaled']
+x_train_lin = train_lin.drop(columns=['Rating', 'Rating_scaled'], errors='ignore')
+y_train_lin = train_lin['Rating']
+x_test_lin = test_lin.drop(columns=['Rating', 'Rating_scaled'], errors='ignore')
+y_test_lin = test_lin['Rating']
+
+x_train = (train_data.select_dtypes(include=['number', 'bool']).drop(columns=['Rating'], errors='ignore'))
+y_train = train_data['Rating']
+x_test = (test_data.select_dtypes(include=['number', 'bool']).drop(columns=['Rating'], errors='ignore'))
+y_test = test_data['Rating']
 
 # LinearRegression
 model = LinearRegression()
-model.fit(x_train, y_train)
-y_train_pred = model.predict(x_train)
-y_test_pred = model.predict(x_test)
+model.fit(x_train_lin, y_train_lin)
+y_train_pred = model.predict(x_train_lin)
+y_test_pred = model.predict(x_test_lin)
 
-print("Test RMSE:", root_mean_squared_error(y_test, y_test_pred))
-print("Test R2:", r2_score(y_test, y_test_pred))
-print("Train RMSE:", root_mean_squared_error(y_train, y_train_pred))
-print("Train R2:", r2_score(y_train, y_train_pred))
+print("Test RMSE:", root_mean_squared_error(y_test_lin, y_test_pred))
+print("Test R2:", r2_score(y_test_lin, y_test_pred))
+print("Train RMSE:", root_mean_squared_error(y_train_lin, y_train_pred))
+print("Train R2:", r2_score(y_train_lin, y_train_pred))
 
 # DecisionTree
 dt = DecisionTreeRegressor(max_depth=15, min_samples_leaf=3, random_state=42)
@@ -318,7 +366,6 @@ y_pred = rf.predict(x_test)
 rmse_rf = root_mean_squared_error(y_test, y_pred)
 r2_rf = r2_score(y_test, y_pred)
 print(f"RF   RMSE={rmse_rf:.3f},  R²={r2_rf:.3f}")
-
 '''
 # Scatter Plot
 plt.figure(figsize=(6, 6))
@@ -367,5 +414,4 @@ top_rat.sort_values().plot(kind='barh', title='Top 10 feature of influence on th
 plt.xlabel('Ratio')
 plt.tight_layout()
 plt.show()
-
 '''
