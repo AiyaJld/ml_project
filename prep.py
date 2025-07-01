@@ -14,6 +14,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import root_mean_squared_error, r2_score, mean_squared_error
 import seaborn as sns
+from sklearn.model_selection import RandomizedSearchCV
+from sklearn.model_selection import GridSearchCV
 
 # Path to folder containing CSV files
 path = "archive-2/Data/all_years"
@@ -147,8 +149,8 @@ top_mi = mi_scores.sort_values(ascending=False)
 '''
 print("MI scores:")
 print(top_mi)
-'''
 dataset = dataset.drop(columns=['Oscar_nominated', 'Oscar_won', 'Year', 'grossWorldWWide'])
+'''
 
 # Convert string representations of lists in 'stars' column to actual Python lists
 dataset['stars'] = dataset['stars'].apply(ast.literal_eval)
@@ -295,29 +297,28 @@ print("Train RMSE:", root_mean_squared_error(y_train, y_train_pred))
 print("Train R2:", r2_score(y_train, y_train_pred))
 
 # DecisionTree
-dt = DecisionTreeRegressor(max_depth=15, min_samples_leaf=3, random_state=42)
+dt = DecisionTreeRegressor(random_state=42, max_depth=5, min_samples_leaf=2, min_samples_split=2)
 dt.fit(x_train, y_train)
-
 y_pred = dt.predict(x_test)
 rmse_dt = root_mean_squared_error(y_test, y_pred)
 r2_dt = r2_score(y_test, y_pred)
 print(f"DT RMSE={rmse_dt:.3f},  R²={r2_dt:.3f}")
 
 # RandomForest
-rf = RandomForestRegressor(
-        n_estimators=900,
-        max_features=0.5,
-        min_samples_leaf=1,
-        n_jobs=-1,
-        oob_score=True,
-        random_state=42)
-rf.fit(x_train, y_train)
+best_params = {
+    'n_estimators': 500,
+    'max_features': 0.5,
+    'max_depth': 25,
+    'bootstrap': True
+}
+model = RandomForestRegressor(**best_params)
+model.fit(x_train, y_train)
+y_pred = model.predict(x_test)
+rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+r2 = r2_score(y_test, y_pred)
 
-print("OOB R² :", rf.oob_score_)
-y_pred = rf.predict(x_test)
-rmse_rf = root_mean_squared_error(y_test, y_pred)
-r2_rf = r2_score(y_test, y_pred)
-print(f"RF   RMSE={rmse_rf:.3f},  R²={r2_rf:.3f}")
+print(f"RMSE: {rmse:.4f}")
+print(f"R2: {r2:.4f}")
 
 '''
 # Scatter Plot
