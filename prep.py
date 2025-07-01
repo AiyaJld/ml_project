@@ -14,7 +14,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import root_mean_squared_error, r2_score, mean_squared_error
 import seaborn as sns
-
+from optimization import opt_rf, opt_tree
 # Path to folder containing CSV files
 path = "archive-2/Data/all_years"
 datasets = []
@@ -265,6 +265,11 @@ test_data = test_data.fillna(0)
 train_lin = train_data.copy()
 test_lin = test_data.copy()
 
+# Initialize StandardScaler
+scaler = StandardScaler()
+train_lin[num_features] = scaler.fit_transform(train_lin[num_features])
+test_lin[num_features] = scaler.transform(test_lin[num_features])
+
 # ─────────── START FORWARD SELECTION ─────────────────────────────
 # 0.  берем только числовые/булевые колонки; Rating — целевая
 candidate_cols = train_lin.select_dtypes(include=['number', 'bool']).columns.drop('Rating')
@@ -307,14 +312,6 @@ test_lin = test_lin[selected + ['Rating']]
 num_features_fs = [c for c in train_lin.columns
                    if is_numeric_dtype(train_lin[c]) and c != 'Rating']
 
-# Initialize StandardScaler
-scaler = StandardScaler()
-
-# Fit scaler only on training data and transform training numerical features
-train_lin[num_features_fs] = scaler.fit_transform(train_lin[num_features_fs])
-
-# Apply the same scaler transformation to test data (no fitting)
-test_lin[num_features_fs] = scaler.transform(test_lin[num_features_fs])
 
 # Scaler
 target_scaler = StandardScaler()
@@ -343,7 +340,7 @@ print("Train RMSE:", root_mean_squared_error(y_train_lin, y_train_pred))
 print("Train R2:", r2_score(y_train_lin, y_train_pred))
 
 # DecisionTree
-dt = DecisionTreeRegressor(max_depth=15, min_samples_leaf=3, random_state=42)
+dt = DecisionTreeRegressor(max_depth=10, min_samples_leaf=4, random_state=42, min_samples_split=10)
 dt.fit(x_train, y_train)
 
 y_pred = dt.predict(x_test)
@@ -353,12 +350,14 @@ print(f"DT RMSE={rmse_dt:.3f},  R²={r2_dt:.3f}")
 
 # RandomForest
 rf = RandomForestRegressor(
-        n_estimators=900,
+        n_estimators=500,
         max_features=0.5,
-        min_samples_leaf=1,
         n_jobs=-1,
+        random_state=42,
+        max_depth=25,
         oob_score=True,
-        random_state=42)
+        bootstrap=True
+    )
 rf.fit(x_train, y_train)
 
 print("OOB R² :", rf.oob_score_)
