@@ -15,6 +15,8 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import root_mean_squared_error, r2_score, mean_squared_error
 import seaborn as sns
 from optimization import opt_rf, opt_tree
+from sklearn.model_selection import KFold
+from sklearn.base import clone
 # Path to folder containing CSV files
 path = "archive-2/Data/all_years"
 datasets = []
@@ -34,12 +36,14 @@ dataset.to_csv('combined_dataset.csv', index=False)
 # Remove duplicate rows from the combined dataset
 dataset = dataset.drop_duplicates()
 
+target = 'Rating'
 # Remove rows where important columns have missing values
 dataset = dataset[~dataset['méta_score'].isna()]
 dataset = dataset[~dataset['production_company'].isna()]
 dataset = dataset[~dataset['stars'].isna()]
 dataset = dataset[~dataset['MPA'].isna()]
 dataset = dataset[~dataset['Rating'].isna()]
+dataset = dataset[~dataset['grossWorldWWide'].isna()]
 dataset = dataset.reset_index(drop=True)
 
 # Drop columns that are irrelevant or unnecessary for analysis
@@ -126,27 +130,7 @@ dataset['Oscar_nominated'] = oscar_nominated
 dataset['Oscar_won'] = oscar_won
 dataset['Nominations'] = nominations
 dataset['Wins'] = wins
-'''
-# Feature selection
-mir_features = ['méta_score', 'grossWorldWWide', 'Votes', 'Duration',
-                'Oscar_nominated', 'Oscar_won', 'Nominations', 'Wins', 'Year']
 
-y_mir = dataset['Rating']
-
-scaler_mi = StandardScaler()
-X_mir_scaled = scaler_mi.fit_transform(dataset[mir_features])
-
-selector_mir = SelectKBest(score_func=mutual_info_regression, k='all')
-selector_mir.fit(X_mir_scaled, y_mir)
-
-mi_scores = pd.Series(selector_mir.scores_, index=mir_features)
-top_mi = mi_scores.sort_values(ascending=False)
-''''''
-print("MI scores:")
-print(top_mi)
-
-dataset = dataset.drop(columns=['Oscar_nominated', 'Oscar_won', 'Year', 'grossWorldWWide'])
-'''
 # Convert string representations of lists in 'stars' column to actual Python lists
 dataset['stars'] = dataset['stars'].apply(ast.literal_eval)
 
@@ -259,14 +243,153 @@ num_features = ['méta_score', 'Votes', 'Duration', 'Nominations',
 # Split dataset into training and testing sets (80% train, 20% test)
 train_data, test_data = train_test_split(dataset, test_size=0.2, random_state=42)
 
-train_data = train_data.fillna(0)
-test_data = test_data.fillna(0)
+#took num features without the rating 
+features = train_data.select_dtypes(include=[np.number]).drop(columns=[target]).columns.tolist()
 
-train_lin = train_data.copy()
-test_lin = test_data.copy()
+X = train_data[features]
+y = train_data[target]
+#forward selection
+def forward_selection(X, y, model, max_features=15):
+    selected_features = []
+    remaining_features = list(X.columns)
+    best_score = np.inf
+    while len(selected_features) < max_features and remaining_features:
+        scores = []
+        for feature in remaining_features:
+            try:
+                model_clone = clone(model)       #cloned clear model not to overtrain 
+                model_clone.fit(X[selected_features + [feature]], y)
+                preds = model_clone.predict(X[selected_features + [feature]])
+                rmse = mean_squared_error(y, preds) ** 0.5
+                scores.append((rmse, feature))
+            except Exception as e:
+                continue  
 
-# Initialize StandardScaler
+        if not scores:
+            break
+        scores.sort()
+        #check if the score is better then prev best score
+        if scores[0][0] < best_score:
+            best_score, best_feature = scores[0]
+            selected_features.append(best_feature)
+            remaining_features.remove(best_feature)
+        else:
+            break
+
+    return selected_features
+
+def evaluate_model_with_cv(X, y, model, n_splits=5, max_features=15, min_votes=4):
+    MODELS_WITHOUT_FS = (RandomForestRegressor, DecisionTreeRegressor)
+
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    rmse_scores = []
+    all_selected = []
+
+    for fold, (train_idx, val_idx) in enumerate(kf.split(X)):
+        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
+        y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
+
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_val_scaled = scaler.transform(X_val)
+
+        X_train_scaled = pd.DataFrame(X_train_scaled, columns=X.columns, index=X_train.index)
+        X_val_scaled = pd.DataFrame(X_val_scaled, columns=X.columns, index=X_val.index)
+
+        # Feature selection — that is not RandomForest или DecisionTree
+        if not isinstance(model, MODELS_WITHOUT_FS):
+            selected_features = forward_selection(X_train_scaled, y_train, model, max_features=max_features)
+        else:
+            selected_features = list(X.columns)
+
+        all_selected.append(selected_features)
+
+        model_clone = clone(model)
+        model_clone.fit(X_train_scaled[selected_features], y_train)
+        preds = model_clone.predict(X_val_scaled[selected_features])
+        rmse = mean_squared_error(y_val, preds) ** 0.5
+        rmse_scores.append(rmse)
+
+        print(f"Fold {fold + 1} RMSE: {rmse:.4f}")
+        flat_list = [f for fold_feats in all_selected for f in fold_feats]
+
+    feature_counts = Counter(flat_list)
+    final_features = [feature for feature, count in feature_counts.items() if count >= min_votes]
+
+    avg_rmse = np.mean(rmse_scores)
+
+    return {
+        "avg_rmse": avg_rmse,
+        "rmse_per_fold": rmse_scores,
+        "final_features": final_features
+    }
+
+x_train = (train_data.select_dtypes(include=['number', 'bool']).drop(columns=['Rating'], errors='ignore'))
+y_train = train_data['Rating']
+x_test = (test_data.select_dtypes(include=['number', 'bool']).drop(columns=['Rating'], errors='ignore'))
+y_test = test_data['Rating']
+
+results_lr = evaluate_model_with_cv(X, y, LinearRegression())
+final_features = results_lr["final_features"]
+x_train_selected = x_train[final_features]
+x_test_selected = test_data[final_features]
+
 scaler = StandardScaler()
+x_train_final = scaler.fit_transform(train_data[final_features])
+x_test_final = scaler.transform(test_data[final_features])
+
+model = LinearRegression()
+model.fit(x_train_final, y_train)
+
+# Предсказываем на тесте
+train_preds = model.predict(x_train_final)
+test_preds = model.predict(x_test_final)
+
+# Оцениваем качество
+r2_test = r2_score(y_test, test_preds)
+r2_train = r2_score(y_train, train_preds)
+test_rmse = mean_squared_error(y_test, test_preds) ** 0.5
+train_rmse = mean_squared_error(y_train, train_preds) ** 0.5
+print(f"linear test RMSE: {test_rmse:.4f}")
+print(f"linear test R2: {test_rmse:.4f}")
+print(f"linear train RMSE: {train_rmse:.4f}")
+print(f"linear train R2: {train_rmse:.4f}")
+
+
+# DecisionTree
+dt = DecisionTreeRegressor(
+    max_depth=10, 
+    min_samples_leaf=4, 
+    random_state=42,
+    min_samples_split=10)
+dt.fit(x_train, y_train)
+
+y_pred = dt.predict(x_test)
+rmse_dt = root_mean_squared_error(y_test, y_pred)
+r2_dt = r2_score(y_test, y_pred)
+print(f"DT RMSE={rmse_dt:.3f},  R²={r2_dt:.3f}")
+
+# RandomForest
+rf = RandomForestRegressor(
+        n_estimators=500,
+        max_features=0.5,
+        n_jobs=-1,
+        random_state=42,
+        max_depth=25,
+        oob_score=True,
+        bootstrap=True
+    )
+rf.fit(x_train, y_train)
+y_pred = rf.predict(x_test)
+rmse_rf = root_mean_squared_error(y_test, y_pred)
+r2_rf = r2_score(y_test, y_pred)
+print(f"RF   RMSE={rmse_rf:.3f},  R²={r2_rf:.3f}")
+
+
+
+
+
+"""
 train_lin[num_features] = scaler.fit_transform(train_lin[num_features])
 test_lin[num_features] = scaler.transform(test_lin[num_features])
 
@@ -311,8 +434,8 @@ test_lin = test_lin[selected + ['Rating']]
 
 num_features_fs = [c for c in train_lin.columns
                    if is_numeric_dtype(train_lin[c]) and c != 'Rating']
-
-
+"""
+"""
 # Scaler
 target_scaler = StandardScaler()
 train_lin['Rating_scaled'] = target_scaler.fit_transform(train_lin['Rating'].values.reshape(-1, 1))
@@ -323,49 +446,14 @@ y_train_lin = train_lin['Rating']
 x_test_lin = test_lin.drop(columns=['Rating', 'Rating_scaled'], errors='ignore')
 y_test_lin = test_lin['Rating']
 
-x_train = (train_data.select_dtypes(include=['number', 'bool']).drop(columns=['Rating'], errors='ignore'))
-y_train = train_data['Rating']
-x_test = (test_data.select_dtypes(include=['number', 'bool']).drop(columns=['Rating'], errors='ignore'))
-y_test = test_data['Rating']
-
-# LinearRegression
-model = LinearRegression()
-model.fit(x_train_lin, y_train_lin)
-y_train_pred = model.predict(x_train_lin)
-y_test_pred = model.predict(x_test_lin)
 
 print("Test RMSE:", root_mean_squared_error(y_test_lin, y_test_pred))
 print("Test R2:", r2_score(y_test_lin, y_test_pred))
 print("Train RMSE:", root_mean_squared_error(y_train_lin, y_train_pred))
 print("Train R2:", r2_score(y_train_lin, y_train_pred))
 
-# DecisionTree
-dt = DecisionTreeRegressor(max_depth=10, min_samples_leaf=4, random_state=42, min_samples_split=10)
-dt.fit(x_train, y_train)
 
-y_pred = dt.predict(x_test)
-rmse_dt = root_mean_squared_error(y_test, y_pred)
-r2_dt = r2_score(y_test, y_pred)
-print(f"DT RMSE={rmse_dt:.3f},  R²={r2_dt:.3f}")
-
-# RandomForest
-rf = RandomForestRegressor(
-        n_estimators=500,
-        max_features=0.5,
-        n_jobs=-1,
-        random_state=42,
-        max_depth=25,
-        oob_score=True,
-        bootstrap=True
-    )
-rf.fit(x_train, y_train)
-
-print("OOB R² :", rf.oob_score_)
-y_pred = rf.predict(x_test)
-rmse_rf = root_mean_squared_error(y_test, y_pred)
-r2_rf = r2_score(y_test, y_pred)
-print(f"RF   RMSE={rmse_rf:.3f},  R²={r2_rf:.3f}")
-'''
+"""'''
 # Scatter Plot
 plt.figure(figsize=(6, 6))
 plt.scatter(y_test, y_test_pred, alpha=0.5)
