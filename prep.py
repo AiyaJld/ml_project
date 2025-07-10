@@ -15,6 +15,7 @@ from sklearn.metrics import root_mean_squared_error, r2_score, mean_squared_erro
 import seaborn as sns
 from pandas.plotting import scatter_matrix
 import os
+from convertation import convert_duration, convert_gross, convert_votes
 
 os.makedirs('plots', exist_ok=True)
 
@@ -49,34 +50,6 @@ dataset = dataset.reset_index(drop=True)
 dataset = dataset.drop(columns=['gross_US_Canada', 'opening_weekend_Gross', 'budget', 'Movie Link', 'description',
                                 'filming_locations', 'release_date'])
 
-# Function to convert duration strings (e.g., '2h 30m') to total minutes
-def convert_duration(duration):
-    if pd.isna(duration):
-        return np.nan
-    hours = re.search(r'(\d+)h', duration)
-    minutes = re.search(r'(\d+)m', duration)
-    h = int(hours.group(1)) if hours else 0
-    m = int(minutes.group(1)) if minutes else 0
-    return h * 60 + m
-
-# Function to convert votes with 'K' or 'M' suffixes to numeric values
-def convert_votes(votes):
-    if pd.isna(votes):
-        return 0
-    if 'K' in votes:
-        num = float(re.search(r'([\d.]+)', votes).group(1)) * 1000
-    elif 'M' in votes:
-        num = float(re.search(r'([\d.]+)', votes).group(1)) * 1000000
-    else:
-        num = float(votes)
-    return num
-
-# Function to convert gross revenue strings like "$123,456,789" to integers
-def convert_gross(gross):
-    if pd.isna(gross):
-        return np.nan
-    gross = int(gross.replace('$', '').replace(',', ''))
-    return gross
 
 # Fill missing values in 'awards_content' column with a default list ['No awards']
 for i in range(len(dataset)):
@@ -280,23 +253,24 @@ dataset = pd.concat([dataset, top_writers,
 num_features = ['méta_score', 'Votes', 'Duration', 'Nominations',
                 'Wins', 'top_actor_count']
 
-# Split dataset into training and testing sets (80% train, 20% test)
-train_data, test_data = train_test_split(dataset, test_size=0.2, random_state=42)
-
-train_data = train_data.fillna(0)
+# Split dataset into training and testing sets (90% train, 10% test)
+train_val_data, test_data = train_test_split(dataset, test_size=0.1, random_state=42)
+train_val_data = train_val_data.fillna(0)
 test_data = test_data.fillna(0)
+train_data, val_data = train_test_split(train_val_data, test_size=1/9, random_state=42)
 
 train_lin = train_data.copy()
 test_lin = test_data.copy()
+val_lin = val_data.copy()
 
 # Initialize StandardScaler
 scaler = StandardScaler()
 train_lin[num_features] = scaler.fit_transform(train_lin[num_features])
 test_lin[num_features] = scaler.transform(test_lin[num_features])
-
+val_lin[num_features] = scaler.transform(val_lin[num_features])
 # ─────────── START FORWARD SELECTION ─────────────────────────────
-candidate_cols = train_lin.select_dtypes(include=['number', 'bool']).columns.drop('Rating')
-y_fs = train_lin['Rating']
+candidate_cols = val_lin.select_dtypes(include=['number', 'bool']).columns.drop('Rating')
+y_fs = val_lin['Rating']
 
 selected = []
 remaining = list(candidate_cols)
@@ -308,8 +282,8 @@ while remaining and len(selected) < max_feats:
     scores = []
     for col in remaining:
         feats = selected + [col]
-        model = LinearRegression().fit(train_lin[feats], y_fs)
-        preds = model.predict(train_lin[feats])
+        model = LinearRegression().fit(val_lin[feats], y_fs)
+        preds = model.predict(val_lin[feats])
         rmse = mean_squared_error(y_fs, preds) ** 0.5
         scores.append((rmse, col))
 
@@ -326,15 +300,17 @@ while remaining and len(selected) < max_feats:
 
 train_lin = train_lin[selected + ['Rating']]
 test_lin = test_lin[selected + ['Rating']]
+val_lin = val_lin[selected+['Rating']]
 # ─────────── END FORWARD SELECTION ─────────────────────────────
 
-num_features_fs = [c for c in train_lin.columns
-                   if is_numeric_dtype(train_lin[c]) and c != 'Rating']
+num_features_fs = [c for c in val_lin.columns
+                   if is_numeric_dtype(val_lin[c]) and c != 'Rating']
 
 # Scaler
 target_scaler = StandardScaler()
 train_lin['Rating_scaled'] = target_scaler.fit_transform(train_lin['Rating'].values.reshape(-1, 1))
 test_lin['Rating_scaled'] = target_scaler.transform(test_lin['Rating'].values.reshape(-1, 1))
+val_lin['Rating_scaled'] = target_scaler.transform(val_lin['Rating'].values.reshape(-1, 1))
 
 x_train_lin = train_lin.drop(columns=['Rating', 'Rating_scaled'], errors='ignore')
 y_train_lin = train_lin['Rating']
@@ -345,6 +321,7 @@ x_train = (train_data.select_dtypes(include=['number', 'bool']).drop(columns=['R
 y_train = train_data['Rating']
 x_test = (test_data.select_dtypes(include=['number', 'bool']).drop(columns=['Rating'], errors='ignore'))
 y_test = test_data['Rating']
+
 
 # LinearRegression
 model = LinearRegression()
@@ -358,8 +335,17 @@ print("Train RMSE:", root_mean_squared_error(y_train_lin, y_train_pred))
 print("Train R2:", r2_score(y_train_lin, y_train_pred))
 
 # DecisionTree
-dt = DecisionTreeRegressor(max_depth=10, min_samples_leaf=4, random_state=42, min_samples_split=10)
+dt = DecisionTreeRegressor(
+    max_depth=10, 
+    min_samples_leaf=4, 
+    random_state=42, 
+    min_samples_split=10)
 dt.fit(x_train, y_train)
+
+y_train_pred_dt = dt.predict(x_train)
+rmse_train_dt = root_mean_squared_error(y_train, y_train_pred_dt)
+r2_train_dt = r2_score(y_train, y_train_pred_dt)
+print(f"DT Train RMSE={rmse_train_dt:.3f}, R²={r2_train_dt:.3f}")
 
 y_pred = dt.predict(x_test)
 rmse_dt = root_mean_squared_error(y_test, y_pred)
@@ -374,11 +360,18 @@ rf = RandomForestRegressor(
         random_state=42,
         max_depth=25,
         oob_score=True,
-        bootstrap=True
+        bootstrap=True,
     )
 rf.fit(x_train, y_train)
 
 print("OOB R² :", rf.oob_score_)
+
+y_train_pred = rf.predict(x_train)
+rmse_train = root_mean_squared_error(y_train, y_train_pred)
+r2_train = r2_score(y_train, y_train_pred)
+print(f"Train RMSE={rmse_train:.3f}, R²={r2_train:.3f}")
+
+
 y_pred = rf.predict(x_test)
 rmse_rf = root_mean_squared_error(y_test, y_pred)
 r2_rf = r2_score(y_test, y_pred)
@@ -405,22 +398,3 @@ def simple_scatter(y_true, y_pred, title):
     plt.close()                       # закрываем, чтобы не копить окна
     print(f'saved -> {fname}')
 
-
-# -------------------------------------------------
-# ───────── Scatter-графики «Actual vs Predicted» ──────────
-# Linear Regression
-simple_scatter(y_train_lin, y_train_pred, 'LR ‒ train')
-simple_scatter(y_test_lin,  y_test_pred,  'LR ‒ test')
-
-# Decision Tree
-y_train_dt = dt.predict(x_train)        # train-прогноз
-y_test_dt = dt.predict(x_test)         # test-прогноз
-simple_scatter(y_train, y_train_dt, 'DT ‒ train')
-simple_scatter(y_test,  y_test_dt,  'DT ‒ test')
-
-# Random Forest
-y_train_rf = rf.predict(x_train)
-y_test_rf = rf.predict(x_test)
-simple_scatter(y_train, y_train_rf, 'RF ‒ train')
-simple_scatter(y_test,  y_test_rf,  'RF ‒ test')
-# ----------------------------------------------------------

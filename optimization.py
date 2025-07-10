@@ -15,7 +15,6 @@ def opt_tree(x_train, y_train):
         estimator=model,
         param_grid=param_grid,
         scoring='r2',        
-        cv=5,
         n_jobs=-1,           
         verbose=2
     )
